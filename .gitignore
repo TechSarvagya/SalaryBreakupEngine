@@ -1,0 +1,84 @@
+# 🐍 Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# 📦 Virtual environment (VERY IMPORTANT)
+venv/
+env/
+.venv/
+
+# ⚙️ Environment variables / secrets
+.env
+.env.*
+
+# 🧪 Testing / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# 🧾 Logs
+*.log
+
+# 🧠 IDE / Editor
+.vscode/
+.idea/
+*.iml
+
+# 💻 OS files
+.DS_Store
+Thumbs.db
+
+# 🚀 FastAPI / server temp
+*.sqlite3
+
+# 📊 pyDMNrules / Excel files (depends 👇)
+# Uncomment ONLY if your rules are generated dynamically
+# *.xlsx
+# *.csv
+
+# 📦 Build / packaging
+build/
+dist/
+*.egg-info/
+
+# 🔐 Secrets / configs
+config.yaml
+secrets.json
+
+# 🧱 Node modules (dependencies)
+node_modules/
+
+# ⚡ Build output
+dist/
+build/
+.out/
+*.bundle.js
+
+# ⚙️ Environment variables / secrets
+.env
+.env.local
+.env.*.local
+
+# 🧪 Testing / coverage
+coverage/
+*.lcov
+
+# 🧠 IDE / editor
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+
+# 💻 OS files
+.DS_Store
+Thumbs.db
+
+# 📝 Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
