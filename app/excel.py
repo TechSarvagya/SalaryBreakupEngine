@@ -4,7 +4,7 @@ from io import BytesIO
 from pathlib import Path
 
 import pandas as pd
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font
 
 from app.config import EMPLOYEE_TEMPLATE_PATH
@@ -12,19 +12,15 @@ from app.config import EMPLOYEE_TEMPLATE_PATH
 INPUT_COLUMNS = [
     "Employee ID",
     "Employee Name",
-    "CTC",
+    "Monthly CTC",
     "CCA",
-    "PF Option",
-    "Professional Tax",
-    "Employee PF Override",
+    "PF Enabled",
+    "State",
+    "Other Deductions",
 ]
 
 
-def ensure_employee_template() -> None:
-    EMPLOYEE_TEMPLATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    if EMPLOYEE_TEMPLATE_PATH.exists():
-        return
-
+def _write_employee_template() -> None:
     workbook = Workbook()
     sheet = workbook.active
     sheet.title = "Employees"
@@ -32,6 +28,20 @@ def ensure_employee_template() -> None:
         cell = sheet.cell(row=1, column=col, value=heading)
         cell.font = Font(bold=True)
     workbook.save(EMPLOYEE_TEMPLATE_PATH)
+
+
+def ensure_employee_template() -> None:
+    EMPLOYEE_TEMPLATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if not EMPLOYEE_TEMPLATE_PATH.exists():
+        _write_employee_template()
+        return
+
+    workbook = load_workbook(EMPLOYEE_TEMPLATE_PATH, read_only=True)
+    sheet = workbook.active
+    headings = [sheet.cell(row=1, column=index).value for index in range(1, len(INPUT_COLUMNS) + 1)]
+    workbook.close()
+    if headings != INPUT_COLUMNS:
+        _write_employee_template()
 
 
 def dataframe_to_workbook_bytes(dataframe: pd.DataFrame, sheet_name: str = "Results") -> bytes:

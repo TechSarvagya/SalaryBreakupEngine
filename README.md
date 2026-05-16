@@ -1,24 +1,36 @@
 # Salary Rule Engine
 
-A FastAPI backend with React + Vite frontend for processing employee salary calculations using DMN (Decision Model Notation) rules. HR teams upload employee data, the engine applies configurable salary rules, and returns calculated salary components.
+A FastAPI + Strawberry GraphQL backend with a React + Vite frontend for processing employee salary workbooks through editable DMN rules. HR users can download the rules workbook, edit payroll formulas in Excel, upload employee data, and receive a calculated salary output workbook.
 
-## What it does
+## What It Does
 
-- HR uploads an employee input spreadsheet (Employee ID, Name, CTC, CCA, PF Option, Professional Tax, Employee PF Override).
-- The API processes each row through a `pyDMNrules` DMN workbook containing salary calculation logic.
-- The engine calculates salary components: Basic, HRA, Bonus, Employee PF, Employer PF, ESI, Medical Insurance, Gratuity, Income Tax (TDS), and Take Home pay.
-- Response is an Excel file with inputs, all calculated outputs, and validation messages for any errors.
-- HR can download the editable rules workbook, modify thresholds/percentages/caps/formulas, and upload it back to reload the engine.
+- Uses `pyDMNrules` to calculate salary components from `data/rules/salary_rules.xlsx`.
+- Creates the default rules workbook on startup if it is missing.
+- Creates the employee input template on startup if it is missing.
+- Processes employee Excel files row by row.
+- Returns calculated salary components, validation messages, and processing status in an Excel output file.
+- Uses GraphQL for all frontend/backend communication.
+
+## Employee Input Columns
+
+The employee workbook uses these columns:
+
+- `Employee ID`
+- `Employee Name`
+- `CTC`
+- `CCA`
+- `PF Option`
+- `Professional Tax`
+- `Employee PF Override`
 
 ## Run
 
 Backend:
 
 ```bash
+pip install -r requirements.txt
 uvicorn app.main:app --reload
 ```
-
-Backend will be available at `http://localhost:8000` with API docs at `/docs`.
 
 Frontend:
 
@@ -28,104 +40,96 @@ npm install
 npm run dev
 ```
 
-Frontend will be available at `http://localhost:5173`.
+Frontend runs at `http://localhost:5173`. Backend runs at `http://localhost:8000`.
 
-This project is now split cleanly:
+## Workflow
 
-- `app/` is backend only
-- `frontend/` is React + Vite only
+1. Start the backend and frontend.
+2. Download the employee template from the frontend.
+3. Download the salary rules workbook if rule changes are needed.
+4. Fill employee rows in the template.
+5. Upload edited salary rules if required.
+6. Upload the employee workbook.
+7. Download the processed salary result workbook.
 
-If you want a production frontend build:
+## GraphQL API
 
-```bash
-cd frontend
-npm run build
+All operations go through:
+
+```text
+POST /graphql
+POST /graphql/
 ```
+
+Queries:
+
+- `health`
+- `rulesWorkbook`
+- `downloadRules`
+- `downloadEmployeeTemplate`
+
+Mutations:
+
+- `reloadRules`
+- `uploadRules(fileContent: String!, fileName: String!)`
+- `processEmployees(fileContent: String!, fileName: String!)`
+
+Excel files are transferred as base64 strings in GraphQL payloads.
+
+## Validation
+
+Rows are validated before DMN calculation:
+
+- `CTC` must be numeric and greater than 0.
+- `CCA` must be numeric and cannot be negative.
+- `Professional Tax` must be numeric and cannot be negative.
+- If `CTC` is 30000 or below, `PF Option` must be `P4`.
+- If `CTC` is above 30000, `PF Option` must be `P1`, `P2`, `P3`, or `P5`.
+- If `PF Option` is `P5`, `Employee PF Override` is required and must be at least 1800.
+
+Invalid rows are still returned in the output workbook with a `Validation Message` and `Processing Status`.
 
 ## Project Structure
 
-```
+```text
 .
-├── app/                          # FastAPI backend
-│   ├── main.py                   # FastAPI app, route handlers
-│   ├── engine.py                 # SalaryRuleEngine (DMN processor)
-│   ├── graphql_schema.py         # GraphQL query/mutation definitions
-│   ├── excel.py                  # Excel read/write utilities
-│   ├── rules_workbook.py         # DMN workbook builder
-│   ├── models.py                 # Data models (ProcessingSummary, EmployeeRow)
-│   └── config.py                 # Paths and configuration
-├── frontend/                     # React + Vite frontend
+├── app/
+│   ├── main.py              # FastAPI app with GraphQL router only
+│   ├── graphql_schema.py    # GraphQL queries and mutations
+│   ├── engine.py            # SalaryRuleEngine and row processing
+│   ├── excel.py             # Employee template and Excel helpers
+│   ├── rules_workbook.py    # Default DMN rules workbook builder
+│   ├── models.py            # Shared dataclasses
+│   └── config.py            # Project paths
+├── data/
+│   ├── rules/               # salary_rules.xlsx
+│   ├── templates/           # employee_input_template.xlsx
+│   └── outputs/             # Generated result workbooks
+├── frontend/
 │   ├── src/
-│   │   ├── App.jsx               # Main React component
-│   │   ├── main.jsx              # React entry point
+│   │   ├── App.jsx
+│   │   ├── main.jsx
 │   │   └── styles.css
 │   ├── index.html
 │   ├── package.json
 │   └── vite.config.js
-├── data/
-│   ├── rules/                    # DMN salary rules workbook
-│   ├── templates/                # Employee input template
-│   └── outputs/                  # Processed results (generated)
-├── requirements.txt              # Python dependencies
+├── requirements.txt
 └── README.md
-
 ```
 
 ## Tech Stack
 
-**Backend:**
-- FastAPI 0.128.0 — REST API framework
-- Strawberry GraphQL 0.312.3 — GraphQL support
-- pyDMNrules 1.4.4 — DMN (Decision Model Notation) rule engine
-- Pandas 2.2.2 — Data processing
-- openpyxl 3.1.5 — Excel file handling
-- Uvicorn 0.35.0 — ASGI server
+Backend:
 
-**Frontend:**
+- FastAPI 0.128.0
+- Strawberry GraphQL 0.312.3
+- pyDMNrules 1.4.4
+- Pandas 2.2.2
+- openpyxl 3.1.5
+- Uvicorn 0.35.0
+
+Frontend:
+
 - React 19.1.0
-- Vite 7.0.0 — Build tool
+- Vite 7.0.0
 - Vite React Plugin 5.0.0
-
-## Workflow
-
-1. **Initialize**: Backend loads `salary_rules.xlsx` (DMN workbook) on startup. If missing, creates default workbook.
-2. **Download Template**: HR downloads employee input template to understand required columns.
-3. **Populate Data**: HR fills in employee rows: ID, Name, CTC, CCA, PF Option, Professional Tax, PF Override.
-4. **Upload & Process**: HR uploads spreadsheet → API validates each row → DMN engine calculates salary → Excel response generated with results + validation messages.
-5. **Review Results**: HR downloads results with all calculated salary components.
-6. **Update Rules** (optional): HR downloads current `salary_rules.xlsx` → modifies thresholds/percentages/formulas → uploads updated workbook → engine reloads.
-
-## Architecture
-
-- **Separation of Concerns**: Backend API handles business logic; React frontend handles UI.
-- **DMN-Driven**: All salary calculation logic lives in the editable Excel workbook, not hardcoded.
-- **Row-Level Validation**: Each employee row is validated (numeric fields, required fields) before DMN execution.
-- **Stateless API**: Each request is independent; no session state.
-- **CORS Enabled**: Frontend (localhost:5173) can call backend (localhost:8000).
-
-## Endpoints
-
-REST API:
-- `GET /health` — Health check
-- `GET /status` — System status (health + rules workbook state)
-- `GET /rules/download` — Download the editable rules workbook (salary_rules.xlsx)
-- `POST /rules/upload` — Upload a modified rules workbook to reload the engine
-- `GET /employees/template` — Download the employee input template
-- `POST /employees/process` — Process an uploaded employee spreadsheet and return results
-
-GraphQL API (at `GET /graphql`):
-- `Query.health` — Returns "ok"
-- `Query.rules_workbook` — Returns rules workbook path and existence status
-- `Mutation.reload_rules` — Manually reload the salary calculation engine
-
-## Notes
-
-- **Salary Components Calculated**: Basic, Basic for Statutory, HRA, Bonus, Employee PF, Employer PF, Employee ESI, Employer ESI, Medical Insurance, Gratuity, Gross Salary, Tax Before Rebate, Tax After Rebate, TDS, Special Allowance, Take Home, CTC with CCA, Gross with CCA.
-- **Employee Input Fields**: Employee ID, Employee Name, CTC (Cost to Company), CCA (Cost to Company Add-ons), PF Option, Professional Tax, Employee PF Override.
-- **Rules Workbook**: Stored at `data/rules/salary_rules.xlsx` — contains DMN rules for all percentage, cap, threshold, and formula logic. This is downloadable and editable by HR.
-- **Employee Template**: Stored at `data/templates/employee_input_template.xlsx` — provides the structure for employee data uploads.
-- **Output Storage**: Processed results are saved to `data/outputs/`.
-- **Validation**: Input validation rules are enforced in the API before DMN execution. Invalid rows are returned in the output sheet with a `Validation Message`.
-- **Hidden Columns**: The returned employee result workbook intentionally hides the internal `HalfSum` helper column.
-- **Numeric Columns**: CTC, CCA, Professional Tax, and Employee PF Override are validated as numeric values.
-- **Processing Summary**: The API returns headers with row counts: `X-Processed-Rows`, `X-Success-Rows`, `X-Error-Rows`.

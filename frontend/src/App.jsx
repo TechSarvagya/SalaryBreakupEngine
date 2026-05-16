@@ -4,7 +4,7 @@ const API_BASE = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
 
 const apiUrl = (path) => `${API_BASE}${path}`;
 
-const graphQlRequest = async (query) => {
+const graphQlRequest = async (query, variables = {}) => {
   const tryPaths = ["/graphql/", "/graphql"];
   let lastError = "Request failed.";
 
@@ -16,7 +16,7 @@ const graphQlRequest = async (query) => {
           "Content-Type": "application/json",
           Accept: "application/json",
         },
-        body: JSON.stringify({ query }),
+        body: JSON.stringify({ query, variables }),
       });
 
       const raw = await response.text();
@@ -50,50 +50,35 @@ const graphQlRequest = async (query) => {
   throw new Error(lastError);
 };
 
-const fetchJson = async (path, options = {}) => {
-  const response = await fetch(apiUrl(path), options);
-  const raw = await response.text();
-  let payload = null;
-  try {
-    payload = raw ? JSON.parse(raw) : null;
-  } catch {
-    payload = null;
-  }
-
-  if (!response.ok) {
-    if (payload?.detail) {
-      throw new Error(payload.detail);
-    }
-    throw new Error(`Request failed${response.status ? ` (${response.status})` : ""}.`);
-  }
-
-  if (!payload) {
-    throw new Error("Server returned an empty response.");
-  }
-
-  return payload;
+const fileToBase64 = async (file) => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result;
+      resolve(result.split(",")[1]);
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
 };
 
-const uploadWorkbook = async (url, file) => {
-  const formData = new FormData();
-  formData.append("file", file);
-  const response = await fetch(apiUrl(url), {
-    method: "POST",
-    body: formData,
-  });
-
-  if (!response.ok) {
-    let detail = "Upload failed";
-    try {
-      const payload = await response.json();
-      detail = payload.detail || payload.message || detail;
-    } catch {
-      detail = await response.text();
-    }
-    throw new Error(detail);
+const downloadFile = (base64Content, fileName) => {
+  const binaryString = atob(base64Content);
+  const bytes = new Uint8Array(binaryString.length);
+  for (let index = 0; index < binaryString.length; index += 1) {
+    bytes[index] = binaryString.charCodeAt(index);
   }
-
-  return response;
+  const blob = new Blob([bytes], {
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 };
 
 const statusLabels = {
@@ -106,7 +91,7 @@ function App() {
   const [rulesInfo, setRulesInfo] = useState({ exists: false, path: "" });
   const [status, setStatus] = useState("loading");
   const [message, setMessage] = useState("Checking the current setup...");
-  const [busy, setBusy] = useState({ rules: false, employees: false, refresh: false });
+  const [busy, setBusy] = useState({ rules: false, employees: false, refresh: false, downloadRules: false, downloadTemplate: false });
   const [lastResult, setLastResult] = useState(null);
 
   const refreshSummary = async () => {
@@ -136,6 +121,50 @@ function App() {
     refreshSummary();
   }, []);
 
+  const handleDownloadRules = async () => {
+    setBusy((current) => ({ ...current, downloadRules: true }));
+    try {
+      const payload = await graphQlRequest(`
+        query DownloadRules {
+          downloadRules {
+            fileName
+            fileContent
+          }
+        }
+      `);
+      downloadFile(payload.downloadRules.fileContent, payload.downloadRules.fileName);
+      setStatus("healthy");
+      setMessage("Salary rules workbook downloaded.");
+    } catch (error) {
+      setStatus("error");
+      setMessage(error.message);
+    } finally {
+      setBusy((current) => ({ ...current, downloadRules: false }));
+    }
+  };
+
+  const handleDownloadTemplate = async () => {
+    setBusy((current) => ({ ...current, downloadTemplate: true }));
+    try {
+      const payload = await graphQlRequest(`
+        query DownloadTemplate {
+          downloadEmployeeTemplate {
+            fileName
+            fileContent
+          }
+        }
+      `);
+      downloadFile(payload.downloadEmployeeTemplate.fileContent, payload.downloadEmployeeTemplate.fileName);
+      setStatus("healthy");
+      setMessage("Employee template downloaded.");
+    } catch (error) {
+      setStatus("error");
+      setMessage(error.message);
+    } finally {
+      setBusy((current) => ({ ...current, downloadTemplate: false }));
+    }
+  };
+
   const handleRulesUpload = async (event) => {
     event.preventDefault();
     const form = event.currentTarget;
@@ -148,12 +177,16 @@ function App() {
 
     setBusy((current) => ({ ...current, rules: true }));
     try {
-      await uploadWorkbook("/rules/upload", file);
-      await graphQlRequest(`
-        mutation ReloadRules {
-          reloadRules
+      const base64Content = await fileToBase64(file);
+      await graphQlRequest(
+        `mutation UploadRules($fileContent: String!, $fileName: String!) {
+          uploadRules(fileContent: $fileContent, fileName: $fileName)
+        }`,
+        {
+          fileContent: base64Content,
+          fileName: file.name,
         }
-      `);
+      );
       setStatus("healthy");
       setMessage("Updated salary rules uploaded successfully.");
       await refreshSummary();
@@ -178,25 +211,30 @@ function App() {
 
     setBusy((current) => ({ ...current, employees: true }));
     try {
-      const response = await uploadWorkbook("/employees/process", file);
-      const blob = await response.blob();
-      const fileName =
-        response.headers.get("content-disposition")?.match(/filename="?([^"]+)"?/)?.[1] ||
-        "salary_results.xlsx";
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = fileName;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      URL.revokeObjectURL(url);
+      const base64Content = await fileToBase64(file);
+      const payload = await graphQlRequest(
+        `mutation ProcessEmployees($fileContent: String!, $fileName: String!) {
+          processEmployees(fileContent: $fileContent, fileName: $fileName) {
+            processedRows
+            successRows
+            errorRows
+            fileName
+            fileContent
+          }
+        }`,
+        {
+          fileContent: base64Content,
+          fileName: file.name,
+        }
+      );
+      const summary = payload.processEmployees;
+      downloadFile(summary.fileContent, summary.fileName);
 
       const result = {
-        processedRows: response.headers.get("x-processed-rows") || "0",
-        successRows: response.headers.get("x-success-rows") || "0",
-        errorRows: response.headers.get("x-error-rows") || "0",
-        fileName,
+        processedRows: summary.processedRows,
+        successRows: summary.successRows,
+        errorRows: summary.errorRows,
+        fileName: summary.fileName,
       };
       setLastResult(result);
       setStatus("healthy");
@@ -212,21 +250,29 @@ function App() {
 
   return (
     <div className="shell">
-      <div className="backdrop backdrop-a" />
-      <div className="backdrop backdrop-b" />
       <main className="page">
-        <section className="hero card">
-          <div>
+        <section className="hero">
+          <div className="hero-copy-block">
             <p className="eyebrow">HR Salary Desk</p>
             <h1>Manage salary sheets without touching code.</h1>
             <p className="hero-copy">
               Download the current salary rules, update them in Excel, upload employee data, and get the finished payroll sheet back.
             </p>
+            <div className="hero-actions">
+              <button className="primary-button" onClick={handleDownloadTemplate} disabled={busy.downloadTemplate}>
+                {busy.downloadTemplate ? "Downloading..." : "Download employee template"}
+              </button>
+              <button className="secondary-button" onClick={handleDownloadRules} disabled={busy.downloadRules}>
+                {busy.downloadRules ? "Downloading..." : "Download salary rules"}
+              </button>
+            </div>
           </div>
           <div className={`status-panel status-${status}`}>
-            <span className="status-dot" />
-            <div>
+            <div className="status-topline">
+              <span className="status-dot" />
               <p className="status-label">{statusLabels[status]}</p>
+            </div>
+            <div>
               <p className="status-message">{message}</p>
             </div>
             <button className="secondary-button" onClick={refreshSummary} disabled={busy.refresh}>
@@ -237,12 +283,9 @@ function App() {
 
         <section className="grid">
           <article className="card action-card">
-            <h2>1. Prepare your files</h2>
-            <p>Start with the latest templates so the columns stay in the correct format.</p>
-            <div className="button-row">
-              <a className="primary-link" href={`${API_BASE}/rules/download`}>Download salary rules</a>
-              <a className="secondary-link" href={`${API_BASE}/employees/template`}>Download employee template</a>
-            </div>
+            <span className="step">01</span>
+            <h2>Prepare files</h2>
+            <p>Start with the latest rules and template so every workbook follows the expected format.</p>
             <div className="mini-note">
               <strong>Current rules file:</strong>
               <span>{rulesInfo.exists ? rulesInfo.path : "No rules workbook available yet."}</span>
@@ -250,7 +293,8 @@ function App() {
           </article>
 
           <article className="card action-card">
-            <h2>2. Update salary rules</h2>
+            <span className="step">02</span>
+            <h2>Update rules</h2>
             <p>Upload the edited salary rules workbook after changing percentages, thresholds, caps, or formulas.</p>
             <form onSubmit={handleRulesUpload} className="stack">
               <input name="rules" type="file" accept=".xlsx" />
@@ -261,7 +305,8 @@ function App() {
           </article>
 
           <article className="card action-card">
-            <h2>3. Process employee sheet</h2>
+            <span className="step">03</span>
+            <h2>Process payroll</h2>
             <p>Upload the employee workbook and the finished salary sheet will download automatically.</p>
             <form onSubmit={handleEmployeeUpload} className="stack">
               <input name="employees" type="file" accept=".xlsx" />
