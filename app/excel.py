@@ -12,11 +12,11 @@ from app.config import EMPLOYEE_TEMPLATE_PATH
 INPUT_COLUMNS = [
     "Employee ID",
     "Employee Name",
-    "CTC",
+    "Monthly CTC",
     "CCA",
-    "PF Option",
-    "Professional Tax",
-    "Employee PF Override",
+    "PF Enabled",
+    "State",
+    "Other Deductions",
 ]
 
 

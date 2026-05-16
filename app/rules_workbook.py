@@ -1,29 +1,44 @@
 from __future__ import annotations
-
-from pathlib import Path
+from typing import Iterable
 
 from openpyxl import Workbook
+from openpyxl.comments import Comment
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
 from app.config import RULES_WORKBOOK_PATH
 
-THIN = Side(style="thin", color="000000")
-DOUBLE = Side(style="double", color="000000")
-TITLE_FILL = PatternFill("solid", fgColor="203A43")
-GLOSSARY_FILL = PatternFill("solid", fgColor="FFF4D6")
-HEADER_FILL = PatternFill("solid", fgColor="9AD1D4")
-INPUT_FILL = PatternFill("solid", fgColor="E8F3F1")
-OUTPUT_FILL = PatternFill("solid", fgColor="FFF0E1")
-RULE_ODD_FILL = PatternFill("solid", fgColor="FFFFFF")
-RULE_EVEN_FILL = PatternFill("solid", fgColor="F7FAFC")
-TITLE_FONT = Font(bold=True, color="FFFFFF", size=12)
-HEADER_FONT = Font(bold=True, color="16324F")
-BODY_ALIGNMENT = Alignment(vertical="center", wrap_text=True)
-TITLE_ALIGNMENT = Alignment(vertical="center", horizontal="left")
+THIN = Side(border_style="thin", color="9CA3AF")
+DOUBLE = Side(border_style="double", color="111827")
+TITLE_FILL = PatternFill("solid", fgColor="1F2937")
+INPUT_FILL = PatternFill("solid", fgColor="DBEAFE")
+OUTPUT_FILL = PatternFill("solid", fgColor="DCFCE7")
+RULE_FILL = PatternFill("solid", fgColor="F9FAFB")
+GUIDE_FILL = PatternFill("solid", fgColor="FEF3C7")
+TITLE_FONT = Font(bold=True, color="FFFFFF")
+HEADER_FONT = Font(bold=True, color="111827")
+BODY_ALIGNMENT = Alignment(vertical="top", wrap_text=True)
 
 
-def _apply_table_border(cell, *, left: Side | None = None, right: Side | None = None, top: Side | None = None, bottom: Side | None = None) -> None:
+def _autosize_sheet(sheet) -> None:
+    for col in sheet.columns:
+        max_length = 0
+        column = get_column_letter(col[0].column)
+        for cell in col:
+            try:
+                if cell.value is not None:
+                    max_length = max(max_length, len(str(cell.value)))
+            except Exception:
+                pass
+        adjusted_width = min(max(max_length + 2, 12), 70)
+        sheet.column_dimensions[column].width = adjusted_width
+
+
+def _apply_double_border(cell) -> None:
+    cell.border = Border(left=DOUBLE, right=DOUBLE, top=DOUBLE, bottom=DOUBLE)
+
+
+def _set_border(cell, *, left=None, right=None, top=None, bottom=None) -> None:
     current = cell.border
     cell.border = Border(
         left=left or current.left,
@@ -33,356 +48,428 @@ def _apply_table_border(cell, *, left: Side | None = None, right: Side | None = 
     )
 
 
-def _write_table(sheet, start_row: int, title: str, inputs: list[str], outputs: list[str], rules: list[list[object]]) -> int:
-    start_col = 1
-    title_cell = sheet.cell(row=start_row, column=start_col, value=title)
+def _write_instructions_sheet(sheet) -> None:
+    rows = [
+        ("Salary Rules Workbook", "Use this file to change payroll rules without changing code."),
+        ("Safe to edit", "Rule values and formulas inside the colored decision tables. This workbook uses the New tax regime."),
+        ("Do not rename", "Sheet names, table names, column headings, or the hidden Glossary structure."),
+        ("Input columns", "Blue columns are conditions. Use '-' when the rule should always match."),
+        ("Output columns", "Green columns are calculated values. Edit percentages, caps, fixed amounts, and slab formulas here."),
+        ("Adding slabs", "Add a new row inside the relevant decision table and keep the same columns and border style."),
+        ("After editing", "Upload this workbook in the app and refresh rules before processing employees."),
+    ]
+    for row_index, (heading, detail) in enumerate(rows, start=1):
+        sheet.cell(row=row_index, column=1, value=heading)
+        sheet.cell(row=row_index, column=2, value=detail)
+        sheet.cell(row=row_index, column=1).font = HEADER_FONT
+        sheet.cell(row=row_index, column=1).fill = GUIDE_FILL
+        sheet.cell(row=row_index, column=2).alignment = BODY_ALIGNMENT
+    sheet.freeze_panes = "A2"
+    _autosize_sheet(sheet)
+
+
+def _write_table(
+    sheet,
+    start_row: int,
+    table_name: str,
+    inputs: Iterable[str],
+    outputs: Iterable[str],
+    rules: list[list[str]],
+    hit_policy: str = "U",
+    note: str | None = None,
+) -> int:
+    """
+    Write a simple 'rules as rows' decision table starting at given row.
+
+    Layout:
+    Row start_row: table name
+    Row start_row + 1: hit-policy cell, then input headings, then output headings
+    Subsequent rows: rule id in col A, then input tests, then output expressions
+    Returns the next free row after the table.
+    """
+    inputs = list(inputs)
+    outputs = list(outputs)
+
+    title_cell = sheet.cell(row=start_row, column=1, value=table_name)
     title_cell.font = TITLE_FONT
     title_cell.fill = TITLE_FILL
-    title_cell.alignment = TITLE_ALIGNMENT
+    title_cell.alignment = BODY_ALIGNMENT
+    if note:
+        title_cell.comment = Comment(note, "Salary Rule Engine")
 
-    header_row = start_row + 1
-    headings = ["U", *inputs, *outputs]
-    divider_col = 1 + len(inputs)
+    # Header row
+    col = 1
+    hit_cell = sheet.cell(row=start_row + 1, column=col, value=hit_policy)
+    hit_cell.font = HEADER_FONT
+    hit_cell.fill = GUIDE_FILL
+    hit_cell.comment = Comment("Hit policy used by pyDMNrules. Usually leave this unchanged.", "Salary Rule Engine")
+    _set_border(hit_cell, bottom=DOUBLE)
+    col += 1
+    for inp in inputs:
+        header_cell = sheet.cell(row=start_row + 1, column=col, value=inp)
+        header_cell.font = HEADER_FONT
+        header_cell.fill = INPUT_FILL
+        header_cell.alignment = BODY_ALIGNMENT
+        header_cell.comment = Comment("Input condition column. '-' means this input does not restrict the rule.", "Salary Rule Engine")
+        _set_border(header_cell, bottom=DOUBLE)
+        col += 1
+    for out in outputs:
+        header_cell = sheet.cell(row=start_row + 1, column=col, value=out)
+        header_cell.font = HEADER_FONT
+        header_cell.fill = OUTPUT_FILL
+        header_cell.alignment = BODY_ALIGNMENT
+        header_cell.comment = Comment("Output calculation column. This is where the rule returns a value.", "Salary Rule Engine")
+        _set_border(header_cell, bottom=DOUBLE)
+        col += 1
 
-    for index, heading in enumerate(headings, start=start_col):
-        cell = sheet.cell(row=header_row, column=index, value=heading)
-        cell.font = HEADER_FONT
-        cell.fill = HEADER_FILL if index == start_col else (INPUT_FILL if index <= divider_col else OUTPUT_FILL)
-        cell.alignment = BODY_ALIGNMENT
-        _apply_table_border(cell, top=THIN, bottom=DOUBLE)
-        if index == divider_col:
-            _apply_table_border(cell, right=DOUBLE)
-        if index == divider_col + 1:
-            _apply_table_border(cell, left=DOUBLE)
+    if inputs:
+        last_input_col = 1 + len(inputs)
+        first_output_col = last_input_col + 1
+        _set_border(sheet.cell(row=start_row + 1, column=last_input_col), right=DOUBLE)
+        _set_border(sheet.cell(row=start_row + 1, column=first_output_col), left=DOUBLE)
+    else:
+        _set_border(hit_cell, right=DOUBLE)
+        _set_border(sheet.cell(row=start_row + 1, column=2), left=DOUBLE)
 
-    for row_offset, rule in enumerate(rules, start=2):
-        for col_offset, value in enumerate(rule, start=0):
-            cell = sheet.cell(row=start_row + row_offset, column=start_col + col_offset, value=value)
-            cell.fill = RULE_ODD_FILL if row_offset % 2 == 0 else RULE_EVEN_FILL
+    last_output_col = 1 + len(inputs) + len(outputs)
+    _set_border(sheet.cell(row=start_row + 1, column=last_output_col), right=DOUBLE)
+
+    # Write rules
+    row = start_row + 2
+    for rule in rules:
+        # rule is a list: [rule_id, in1, in2, ..., out1, out2, ...]
+        for c, val in enumerate(rule, start=1):
+            cell = sheet.cell(row=row, column=c, value=val)
+            cell.fill = RULE_FILL
             cell.alignment = BODY_ALIGNMENT
-            _apply_table_border(cell, top=THIN, bottom=THIN, left=THIN, right=THIN)
-            if start_col + col_offset == divider_col:
-                _apply_table_border(cell, right=DOUBLE)
-            if start_col + col_offset == divider_col + 1:
-                _apply_table_border(cell, left=DOUBLE)
-    return start_row + len(rules) + 3
+            _set_border(cell, left=THIN, right=THIN, top=THIN, bottom=THIN)
+            if c == 1:
+                cell.comment = Comment("Rule number. Keep unique within this table.", "Salary Rule Engine")
+            elif c > 1 + len(inputs):
+                cell.comment = Comment("Editable output expression. Change rates, caps, fixed amounts, or slab formulas carefully.", "Salary Rule Engine")
+        row += 1
+
+    return row + 1
 
 
-def _build_glossary(sheet) -> None:
+def _write_glossary(sheet) -> None:
+    sheet["A1"] = "Glossary Salary Engine"
+    sheet["B1"] = "Business Concept"
+    sheet["C1"] = "Attribute"
+    sheet.append(["Variable", "Business Concept", "Attribute"])
     rows = [
-        ("Glossary Salary Engine", "Business Concept", "Attribute"),
-        ("Variable", "Business Concept", "Attribute"),
         ("Employee ID", "Employee", "employee_id"),
         ("Employee Name", None, "employee_name"),
+        ("Monthly CTC", None, "monthly_ctc"),
         ("CTC", None, "ctc"),
         ("CCA", None, "cca"),
-        ("PF Option", None, "pf_option"),
-        ("Professional Tax", None, "professional_tax"),
-        ("Employee PF Override", None, "employee_pf_override"),
-        ("Validation Message", "Validation", "message"),
+        ("PF Enabled", None, "pf_enabled"),
+        ("State", None, "state"),
+        ("Other Deductions", None, "other_deductions"),
         ("Basic", "Salary", "basic"),
-        ("HalfSum", None, "half_sum"),
-        ("Basic for Statutory", None, "basic_for_statutory"),
         ("HRA", None, "hra"),
+        ("Transport Allowance", None, "transport_allowance"),
+        ("Medical Allowance", None, "medical_allowance"),
         ("Bonus", None, "bonus"),
-        ("Employee PF", None, "employee_pf"),
-        ("Employer PF", None, "employer_pf"),
-        ("Employee ESI", None, "employee_esi"),
-        ("Employer ESI", None, "employer_esi"),
-        ("Medical Insurance", None, "medical_insurance"),
-        ("Gratuity", None, "gratuity"),
+        ("Gross Before ESI", None, "gross_before_esi"),
+        ("Special", None, "special"),
         ("Gross", None, "gross"),
-        ("Tax Before Rebate", "Tax", "tax_before_rebate"),
+        ("Employer PF", "EmployerCost", "employer_pf"),
+        ("Employer ESI", None, "employer_esi"),
+        ("Gratuity", None, "gratuity"),
+        ("Employer Insurance", None, "employer_insurance"),
+        ("Employee PF", "Deduction", "employee_pf"),
+        ("Employee ESI", None, "employee_esi"),
+        ("Professional Tax", None, "professional_tax"),
+        ("Taxable Annual", "Tax", "taxable_annual"),
+        ("Tax Before Rebate", None, "tax_before_rebate"),
         ("Tax After Rebate", None, "tax_after_rebate"),
-        ("Surcharge Multiplier", None, "surcharge_multiplier"),
         ("TDS", None, "tds"),
-        ("Special", "Final", "special"),
-        ("Take Home", None, "take_home"),
-        ("CTC with CCA", None, "ctc_with_cca"),
-        ("Gross with CCA", None, "gross_with_cca"),
+        ("Take Home", "Final", "take_home"),
+        ("CTC (Total)", None, "ctc_total"),
     ]
-
-    for row_index, row in enumerate(rows, start=1):
-        for col_index, value in enumerate(row, start=1):
-            cell = sheet.cell(row=row_index, column=col_index, value=value)
-            cell.alignment = BODY_ALIGNMENT
-            if row_index == 1:
-                cell.fill = TITLE_FILL
-                cell.font = TITLE_FONT
-            elif row_index == 2:
-                cell.fill = GLOSSARY_FILL
-                cell.font = HEADER_FONT
-            else:
-                cell.fill = RULE_ODD_FILL if row_index % 2 else RULE_EVEN_FILL
+    for row in rows:
+        sheet.append(row)
+    sheet["A1"].font = TITLE_FONT
+    sheet["A1"].fill = TITLE_FILL
+    sheet["A2"].font = HEADER_FONT
     for cell in sheet[2]:
+        cell.fill = GUIDE_FILL
         cell.font = HEADER_FONT
+    sheet.freeze_panes = "A3"
+    _autosize_sheet(sheet)
 
 
-def _autosize_sheet(sheet) -> None:
-    for column in sheet.columns:
-        values = [str(cell.value) for cell in column if cell.value is not None]
-        if not values:
-            continue
-        width = min(max(len(value) for value in values) + 4, 38)
-        sheet.column_dimensions[get_column_letter(column[0].column)].width = width
-    sheet.freeze_panes = "A2"
+def build_rules_workbook(path=RULES_WORKBOOK_PATH):
+    """Create a DMN-style rules workbook for pyDMNrules to load.
 
-
-def build_rules_workbook(path: Path = RULES_WORKBOOK_PATH) -> Path:
+    Each payroll component is created as a single-rule decision table that HR can edit.
+    The tables are simple 'rules-as-rows' tables so pyDMNrules will parse them.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    workbook = Workbook()
+    wb = Workbook()
+    # remove default sheet
+    if "Sheet" in wb.sheetnames:
+        wb.remove(wb["Sheet"])
 
-    glossary = workbook.active
-    glossary.title = "Glossary"
-    _build_glossary(glossary)
-    glossary.sheet_view.showGridLines = False
-    glossary.sheet_properties.tabColor = "203A43"
+    glossary = wb.create_sheet("Glossary")
+    _write_glossary(glossary)
 
-    validations = workbook.create_sheet("01 Validation")
-    validations.sheet_view.showGridLines = False
-    validations.sheet_properties.tabColor = "8ECAE6"
-    row = 1
-    row = _write_table(
-        validations,
-        row,
-        "Validation Checks",
-        ["CTC", "CCA", "Professional Tax", "PF Option", "Employee PF Override"],
-        ["Validation Message"],
-        [
-            ["1", "-", "-", "-", "-", "-", '""'],
-            ["2", "-", "-", "-", "-", "-", '""'],
-        ],
-    )
+    instr = wb.create_sheet("How to Use")
+    _write_instructions_sheet(instr)
 
-    components = workbook.create_sheet("02 Components")
-    components.sheet_view.showGridLines = False
-    components.sheet_properties.tabColor = "2A9D8F"
-    row = 1
-    row = _write_table(
-        components,
-        row,
+    # Components sheet: multiple small decision tables stacked vertically
+    comp = wb.create_sheet("01 Salary Components")
+    r = 1
+    r = _write_table(
+        comp,
+        r,
         "Basic Salary",
-        ["CTC"],
+        ["Monthly CTC"],
         ["Basic"],
-        [
-            ["1", "[15000..25000]", "decimal(Employee.ctc * 0.5, 0)"],
-            ["2", "[25001..35000]", "22000"],
-            ["3", "[35001..45000]", "22500"],
-            ["4", "-", "decimal(Employee.ctc * 0.5, 0)"],
-        ],
+        [["1", "-", "decimal(Employee.monthly_ctc * 0.4, 0)"]],
+        note="Basic = 40 percent of Monthly CTC. Edit 0.4 to change the percentage.",
     )
-    row = _write_table(
-        components,
-        row,
-        "Statutory Basic",
-        ["Basic", "CTC", "CCA"],
-        ["HalfSum", "Basic for Statutory"],
-        [
-            ["1", "-", "-", "-", "decimal((Employee.ctc + Employee.cca) / 2, 0)", "decimal(max(Salary.basic, Salary.half_sum), 0)"],
-            ["2", "-", "-", "-", "decimal((Employee.ctc + Employee.cca) / 2, 0)", "decimal(max(Salary.basic, Salary.half_sum), 0)"],
-        ],
-    )
-    row = _write_table(
-        components,
-        row,
-        "HRA Rule",
-        ["CTC", "Basic"],
+
+    r = _write_table(
+        comp,
+        r,
+        "HRA",
+        ["Basic"],
         ["HRA"],
-        [
-            ["1", "[25001..45000]", "-", "0"],
-            ["2", "-", "-", "decimal(Salary.basic * 0.5, 0)"],
-        ],
+        [["1", "-", "decimal(Salary.basic * 0.4, 0)"]],
+        note="HRA = 40 percent of Basic. Edit 0.4 to change the percentage.",
     )
-    row = _write_table(
-        components,
-        row,
-        "Bonus Rule",
-        ["Basic for Statutory"],
+
+    r = _write_table(
+        comp,
+        r,
+        "Fixed Allowances",
+        [],
+        ["Transport Allowance", "Medical Allowance"],
+        [["1", "1600", "1250"]],
+        note="Fixed monthly allowance values. Edit the output cells to change fixed amounts.",
+    )
+
+    r = _write_table(
+        comp,
+        r,
+        "Bonus",
+        ["Basic"],
         ["Bonus"],
-        [
-            ["1", "<= 21000", "decimal(Salary.basic_for_statutory * 0.0833, 0)"],
-            ["2", "> 21000", "0"],
-        ],
+        [["1", "-", "decimal(Salary.basic * 0.0833, 0)"]],
+        note="Bonus = 8.33 percent of Basic. Edit 0.0833 to change the percentage.",
     )
-    row = _write_table(
-        components,
-        row,
-        "PF Rule",
-        ["PF Option", "Basic for Statutory", "Employee PF Override"],
-        ["Employee PF", "Employer PF"],
+
+    r = _write_table(
+        comp,
+        r,
+        "Employer PF",
+        ["PF Enabled", "Basic"],
+        ["Employer PF"],
         [
-            ["1", '"P1"', "-", "-", "0", "0"],
-            ["2", '"P2"', "-", "-", "1800", "1800"],
-            ["3", '"P3"', "-", "-", "decimal(Salary.basic_for_statutory * 0.12, 0)", "decimal(Salary.basic_for_statutory * 0.12, 0)"],
-            ["4", '"P4"', "-", "-", "decimal(min(Salary.basic_for_statutory * 0.12, 1800), 0)", "decimal(min(Salary.basic_for_statutory * 0.12, 1800), 0)"],
-            ["5", '"P5"', "-", "-", "decimal(Employee.employee_pf_override, 0)", "1800"],
+            ["1", '"No"', "-", "0"],
+            ["2", '"Yes"', "-", "decimal(min(Salary.basic, 15000) * 0.12, 0)"],
         ],
+        note="Employer PF = 12 percent of PF wage, capped at Basic or 15000. Edit 0.12 or 15000 if policy changes.",
     )
-    row = _write_table(
-        components,
-        row,
-        "ESI Rule",
-        ["Basic for Statutory"],
-        ["Employee ESI", "Employer ESI"],
-        [
-            ["1", "<= 21000", "decimal(Salary.basic_for_statutory * 0.0075, 0)", "decimal(Salary.basic_for_statutory * 0.0325, 0)"],
-            ["2", "> 21000", "0", "0"],
-        ],
-    )
-    row = _write_table(
-        components,
-        row,
-        "Medical Insurance Rule",
-        ["Basic for Statutory"],
-        ["Medical Insurance"],
-        [
-            ["1", "<= 21000", "0"],
-            ["2", "> 21000", "250"],
-        ],
-    )
-    row = _write_table(
-        components,
-        row,
-        "Gratuity Rule",
+
+    r = _write_table(
+        comp,
+        r,
+        "Gratuity",
         ["Basic"],
         ["Gratuity"],
-        [
-            ["1", "-", "decimal(Salary.basic * 0.05, 0)"],
-            ["2", "-", "decimal(Salary.basic * 0.05, 0)"],
-        ],
-    )
-    row = _write_table(
-        components,
-        row,
-        "Gross Rule",
-        ["CTC", "Employer PF", "Employer ESI", "Gratuity"],
-        ["Gross"],
-        [
-            ["1", "-", "-", "-", "-", "decimal(Employee.ctc - Salary.employer_pf - Salary.employer_esi - Salary.gratuity, 0)"],
-            ["2", "-", "-", "-", "-", "decimal(Employee.ctc - Salary.employer_pf - Salary.employer_esi - Salary.gratuity, 0)"],
-        ],
+        [["1", "-", "decimal(Salary.basic * 0.0481, 0)"]],
+        note="Gratuity = 4.81 percent of Basic. Edit 0.0481 to change the percentage.",
     )
 
-    tax = workbook.create_sheet("03 Tax")
-    tax.sheet_view.showGridLines = False
-    tax.sheet_properties.tabColor = "E76F51"
-    row = 1
-    row = _write_table(
-        tax,
-        row,
-        "Tax Slab",
+    r = _write_table(
+        comp,
+        r,
+        "Employer Insurance",
+        [],
+        ["Employer Insurance"],
+        [["1", "1000"]],
+        note="Fixed employer insurance cost. Edit the output amount to change it.",
+    )
+
+    r = _write_table(
+        comp,
+        r,
+        "Employee PF",
+        ["PF Enabled", "Basic"],
+        ["Employee PF"],
+        [
+            ["1", '"No"', "-", "0"],
+            ["2", '"Yes"', "-", "decimal(min(Salary.basic, 15000) * 0.12, 0)"],
+        ],
+        note="Employee PF = 12 percent of PF wage, capped at Basic or 15000. Edit 0.12 or 15000 if policy changes.",
+    )
+
+    # Gross before ESI lets employer ESI remain part of CTC without circular rules.
+    r = _write_table(
+        comp,
+        r,
+        "Gross Before ESI",
+        ["Monthly CTC", "Employer PF", "Gratuity", "Employer Insurance"],
+        ["Gross Before ESI"],
+        [["1", "-", "-", "-", "-", "decimal(Employee.monthly_ctc - EmployerCost.employer_pf - EmployerCost.gratuity - EmployerCost.employer_insurance, 0)"]],
+        note="Intermediate value used to avoid circular ESI calculation. Usually do not edit.",
+    )
+
+    r = _write_table(
+        comp,
+        r,
+        "Employer ESI",
+        ["Gross Before ESI"],
+        ["Employer ESI"],
+        [
+            ["1", "<= 21000", "decimal((Salary.gross_before_esi / 1.0325) * 0.0325, 0)"],
+            ["2", "> 21000", "0"],
+        ],
+        note="Employer ESI applies only when gross is 21000 or below. Edit 21000 or 0.0325 if policy changes.",
+    )
+
+    r = _write_table(
+        comp,
+        r,
+        "Gross",
+        ["Gross Before ESI", "Employer ESI"],
         ["Gross"],
+        [["1", "-", "-", "decimal(Salary.gross_before_esi - EmployerCost.employer_esi, 0)"]],
+        note="Gross salary includes earning components only and excludes employer-side cost components.",
+    )
+
+    r = _write_table(
+        comp,
+        r,
+        "Employee ESI",
+        ["Gross"],
+        ["Employee ESI"],
+        [
+            ["1", "<= 21000", "decimal(Salary.gross * 0.0075, 0)"],
+            ["2", "> 21000", "0"],
+        ],
+        note="Employee ESI applies only when gross is 21000 or below. Edit 21000 or 0.0075 if policy changes.",
+    )
+
+    r = _write_table(
+        comp,
+        r,
+        "Professional Tax",
+        ["State", "Gross"],
+        ["Professional Tax"],
+        [
+            ["1", '"Delhi"', "<= 15000", "0"],
+            ["2", '"Delhi"', "> 15000", "200"],
+            ["3", "-", "-", "0"],
+        ],
+        hit_policy="F",
+        note="Professional Tax by state and gross. Add state rows above the final fallback row.",
+    )
+
+    r = _write_table(
+        comp,
+        r,
+        "Special Allowance",
+        ["Gross", "Basic", "HRA", "Transport Allowance", "Medical Allowance", "Bonus"],
+        ["Special"],
+        [["1", "-", "-", "-", "-", "-", "-", "decimal(Salary.gross - Salary.basic - Salary.hra - Salary.transport_allowance - Salary.medical_allowance - Salary.bonus, 0)"]],
+        note="Special Allowance is the balancing component after all other earnings.",
+    )
+
+    comp.freeze_panes = "A2"
+    _autosize_sheet(comp)
+
+    # Tax sheet
+    tax = wb.create_sheet("02 Tax and TDS")
+    r = 1
+    # Taxable Annual
+    r = _write_table(
+        tax,
+        r,
+        "Taxable Income",
+        ["Gross", "Other Deductions"],
+        ["Taxable Annual"],
+        [["1", "-", "-", "decimal(max(0, (Salary.gross * 12) - 75000 - Employee.other_deductions), 0)"]],
+        note="Taxable Annual = Gross * 12 - standard deduction 75000 - other deductions. Uses New tax regime.",
+    )
+
+    r = _write_table(
+        tax,
+        r,
+        "Income Tax Slabs",
+        ["Taxable Annual"],
         ["Tax Before Rebate"],
         [
-            ["1", "< 33333", "0"],
-            ["2", "[33333..66666]", "decimal(Salary.gross * 0.05, 0)"],
-            ["3", "(66666..100000]", "decimal(Salary.gross * 0.10, 0)"],
-            ["4", "(100000..133333]", "decimal(Salary.gross * 0.15, 0)"],
-            ["5", "(133333..166666]", "decimal(Salary.gross * 0.20, 0)"],
-            ["6", "(166666..200000]", "decimal(Salary.gross * 0.25, 0)"],
-            ["7", "> 200000", "decimal(Salary.gross * 0.30, 0)"],
+            ["1", "<= 400000", "0"],
+            ["2", "(400000..800000]", "decimal((Tax.taxable_annual - 400000) * 0.05, 0)"],
+            ["3", "(800000..1200000]", "decimal(20000 + (Tax.taxable_annual - 800000) * 0.10, 0)"],
+            ["4", "(1200000..1600000]", "decimal(60000 + (Tax.taxable_annual - 1200000) * 0.15, 0)"],
+            ["5", "(1600000..2000000]", "decimal(120000 + (Tax.taxable_annual - 1600000) * 0.20, 0)"],
+            ["6", "(2000000..2400000]", "decimal(200000 + (Tax.taxable_annual - 2000000) * 0.25, 0)"],
+            ["7", "> 2400000", "decimal(300000 + (Tax.taxable_annual - 2400000) * 0.30, 0)"],
         ],
+        note="New regime annual slab table. To add a slab, insert a row and adjust the ranges and formula amounts.",
     )
-    row = _write_table(
+
+    r = _write_table(
         tax,
-        row,
+        r,
         "Tax Rebate",
-        ["Gross", "Tax Before Rebate"],
+        ["Taxable Annual", "Tax Before Rebate"],
         ["Tax After Rebate"],
         [
-            ["1", "<= 100000", "-", "decimal(max(Tax.tax_before_rebate - 5000, 0), 0)"],
-            ["2", "> 100000", "-", "decimal(Tax.tax_before_rebate, 0)"],
+            ["1", "<= 1200000", "-", "0"],
+            ["2", "> 1200000", "-", "Tax.tax_before_rebate"],
         ],
+        note="New regime rebate table. Current rule sets tax to zero up to taxable annual income of 1200000.",
     )
-    row = _write_table(
+
+    r = _write_table(
         tax,
-        row,
-        "Tax Surcharge",
-        ["Gross"],
-        ["Surcharge Multiplier"],
-        [
-            ["1", "< 416667", "1"],
-            ["2", "[416667..833333]", "1.1"],
-            ["3", "(833333..1666667]", "1.15"],
-            ["4", "> 1666667", "1.25"],
-        ],
-    )
-    row = _write_table(
-        tax,
-        row,
+        r,
         "Final TDS",
-        ["Tax After Rebate", "Surcharge Multiplier"],
+        ["Tax After Rebate"],
         ["TDS"],
-        [
-            ["1", "-", "-", "decimal(Tax.tax_after_rebate * Tax.surcharge_multiplier * 1.04, 0)"],
-            ["2", "-", "-", "decimal(Tax.tax_after_rebate * Tax.surcharge_multiplier * 1.04, 0)"],
-        ],
+        [["1", "-", "decimal(decimal(Tax.tax_after_rebate * 1.04, 0) / 12, 0)"]],
+        note="Monthly TDS = annual tax after rebate plus 4 percent cess, divided by 12.",
     )
 
-    finals = workbook.create_sheet("04 Final")
-    finals.sheet_view.showGridLines = False
-    finals.sheet_properties.tabColor = "F4A261"
-    row = 1
-    row = _write_table(
+    tax.freeze_panes = "A2"
+    _autosize_sheet(tax)
+
+    # Final outputs sheet
+    finals = wb.create_sheet("03 Final Salary")
+    r = 1
+    r = _write_table(
         finals,
-        row,
-        "Final Salary Outputs",
-        [
-            "Gross",
-            "Basic",
-            "HRA",
-            "Bonus",
-            "Employee PF",
-            "Employee ESI",
-            "Professional Tax",
-            "TDS",
-            "CCA",
-            "Medical Insurance",
-            "CTC",
-        ],
-        ["Special", "Take Home", "CTC with CCA", "Gross with CCA"],
-        [
-            [
-                "1",
-                "-",
-                "-",
-                "-",
-                "-",
-                "-",
-                "-",
-                "-",
-                "-",
-                "-",
-                "-",
-                "-",
-                "decimal(Salary.gross - Salary.basic - Salary.hra - Salary.bonus, 0)",
-                "decimal(Salary.gross - Salary.employee_pf - Salary.employee_esi - Employee.professional_tax - Tax.tds + Employee.cca - Salary.medical_insurance, 0)",
-                "decimal(Employee.ctc + Employee.cca, 0)",
-                "decimal(Salary.gross + Employee.cca, 0)",
-            ],
-            [
-                "2",
-                "-",
-                "-",
-                "-",
-                "-",
-                "-",
-                "-",
-                "-",
-                "-",
-                "-",
-                "-",
-                "-",
-                "decimal(Salary.gross - Salary.basic - Salary.hra - Salary.bonus, 0)",
-                "decimal(Salary.gross - Salary.employee_pf - Salary.employee_esi - Employee.professional_tax - Tax.tds + Employee.cca - Salary.medical_insurance, 0)",
-                "decimal(Employee.ctc + Employee.cca, 0)",
-                "decimal(Salary.gross + Employee.cca, 0)",
-            ],
-        ],
+        r,
+        "Final Outputs",
+        ["Gross", "Employee PF", "Employee ESI", "Professional Tax", "TDS", "Employer PF", "Employer ESI", "Gratuity", "Employer Insurance"],
+        ["Take Home", "CTC (Total)"],
+        [[
+            "1",
+            "-",
+            "-",
+            "-",
+            "-",
+            "-",
+            "-",
+            "-",
+            "-",
+            "-",
+            "decimal(Salary.gross - Deduction.employee_pf - Deduction.employee_esi - Deduction.professional_tax - Tax.tds, 0)",
+            "decimal(Salary.gross + EmployerCost.employer_pf + EmployerCost.employer_esi + EmployerCost.gratuity + EmployerCost.employer_insurance, 0)",
+        ]],
+        note="Take Home = Gross - employee deductions. CTC Total = Gross + employer cost components.",
     )
 
-    for sheet in workbook.worksheets:
-        _autosize_sheet(sheet)
+    finals.freeze_panes = "A2"
+    _autosize_sheet(finals)
 
-    workbook.save(path)
+    wb.active = wb.sheetnames.index("How to Use")
+
+    wb.save(path)
     return path

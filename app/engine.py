@@ -11,60 +11,69 @@ from pyDMNrules import DMN
 from app.config import OUTPUT_DIR, RULES_WORKBOOK_PATH
 from app.models import ProcessingSummary
 
-NUMERIC_COLUMNS = ["CTC", "CCA", "Professional Tax", "Employee PF Override"]
-REQUIRED_COLUMNS = ["CTC", "CCA", "PF Option", "Professional Tax"]
+NUMERIC_COLUMNS = [
+    "Monthly CTC",
+    "CTC",
+    "CCA",
+    "Other Deductions",
+]
+REQUIRED_COLUMNS = ["Monthly CTC", "CCA", "PF Enabled", "State"]
 OUTPUT_COLUMNS = [
     "Validation Message",
     "Basic",
-    "Basic for Statutory",
     "HRA",
+    "Transport Allowance",
+    "Medical Allowance",
     "Bonus",
-    "Employee PF",
-    "Employer PF",
-    "Employee ESI",
-    "Employer ESI",
-    "Medical Insurance",
-    "Gratuity",
+    "Special",
     "Gross",
+    "Employer PF",
+    "Employer ESI",
+    "Employer Insurance",
+    "Gratuity",
+    "Employee PF",
+    "Employee ESI",
+    "Professional Tax",
+    "Taxable Annual",
     "Tax Before Rebate",
     "Tax After Rebate",
-    "Surcharge Multiplier",
     "TDS",
-    "Special",
     "Take Home",
-    "CTC with CCA",
-    "Gross with CCA",
+    "CTC (Total)",
 ]
 FINAL_COLUMN_ORDER = [
     "Employee ID",
     "Employee Name",
+    "Monthly CTC",
     "CTC",
     "CCA",
-    "PF Option",
-    "Professional Tax",
-    "Employee PF Override",
+    "PF Enabled",
+    "State",
+    "Other Deductions",
     *OUTPUT_COLUMNS,
     "Processing Status",
 ]
 ROUNDED_OUTPUT_COLUMNS = [
     "Basic",
-    "Basic for Statutory",
     "HRA",
+    "Transport Allowance",
+    "Medical Allowance",
     "Bonus",
-    "Employee PF",
-    "Employer PF",
-    "Employee ESI",
-    "Employer ESI",
-    "Medical Insurance",
-    "Gratuity",
+    "Special",
     "Gross",
+    "Employer PF",
+    "Employer ESI",
+    "Employer Insurance",
+    "Gratuity",
+    "Employee PF",
+    "Employee ESI",
+    "Professional Tax",
+    "Taxable Annual",
     "Tax Before Rebate",
     "Tax After Rebate",
     "TDS",
-    "Special",
     "Take Home",
-    "CTC with CCA",
-    "Gross with CCA",
+    "CTC (Total)",
 ]
 
 
@@ -94,40 +103,32 @@ class SalaryRuleEngine:
 
     def _validate_row(self, row: dict[str, object]) -> list[str]:
         errors: list[str] = []
-        ctc = row.get("CTC")
+        monthly_ctc = row.get("Monthly CTC")
         cca = row.get("CCA")
-        professional_tax = row.get("Professional Tax")
-        pf_option = row.get("PF Option")
-        pf_override = row.get("Employee PF Override")
+        pf_enabled = row.get("PF Enabled")
+        state = row.get("State")
 
-        if pd.isna(ctc) or ctc is None:
-            errors.append("CTC must be numeric")
-        elif float(ctc) <= 0:
-            errors.append("CTC must be greater than 0")
+        if monthly_ctc is None or pd.isna(monthly_ctc):
+            errors.append("Monthly CTC must be numeric")
+        elif float(monthly_ctc) <= 0:
+            errors.append("Monthly CTC must be greater than 0")
 
         if pd.isna(cca) or cca is None:
             errors.append("CCA must be numeric")
         elif float(cca) < 0:
             errors.append("CCA cannot be negative")
 
-        if pd.isna(professional_tax) or professional_tax is None:
-            errors.append("Professional Tax must be numeric")
-        elif float(professional_tax) < 0:
-            errors.append("Professional Tax cannot be negative")
+        if pf_enabled is None or pd.isna(pf_enabled):
+            errors.append("PF Enabled must be provided as Yes or No")
+        elif isinstance(pf_enabled, str):
+            normalized = pf_enabled.strip().lower()
+            if normalized not in {"yes", "no"}:
+                errors.append("PF Enabled must be 'Yes' or 'No'")
+        else:
+            errors.append("PF Enabled must be provided as text 'Yes' or 'No'")
 
-        if not isinstance(pf_option, str):
-            errors.append("PF Option must be provided")
-        elif not pd.isna(ctc) and ctc is not None:
-            if float(ctc) <= 30000 and pf_option != "P4":
-                errors.append("If CTC is 30000 or below, PF Option must be P4")
-            if float(ctc) > 30000 and pf_option not in {"P1", "P2", "P3", "P5"}:
-                errors.append("If CTC is above 30000, PF Option must be P1, P2, P3, or P5")
-
-        if pf_option == "P5":
-            if pd.isna(pf_override) or pf_override is None:
-                errors.append("Employee PF Override is required for P5")
-            elif float(pf_override) < 1800:
-                errors.append("Employee PF Override must be at least 1800 for P5")
+        if state is None or pd.isna(state) or not str(state).strip():
+            errors.append("State must be provided")
 
         return errors
 
@@ -139,9 +140,36 @@ class SalaryRuleEngine:
         for column in REQUIRED_COLUMNS:
             if column not in prepared.columns:
                 prepared[column] = None
-        for column in NUMERIC_COLUMNS:
-            if column in prepared.columns:
-                prepared[column] = pd.to_numeric(prepared[column], errors="coerce")
+        # Support either Monthly CTC or CTC as input
+        if "Monthly CTC" in prepared.columns:
+            prepared["Monthly CTC"] = pd.to_numeric(prepared["Monthly CTC"], errors="coerce")
+        if "CTC" in prepared.columns:
+            prepared["CTC"] = pd.to_numeric(prepared["CTC"], errors="coerce")
+        if "CCA" in prepared.columns:
+            prepared["CCA"] = pd.to_numeric(prepared["CCA"], errors="coerce")
+        if "Other Deductions" in prepared.columns:
+            prepared["Other Deductions"] = pd.to_numeric(prepared["Other Deductions"], errors="coerce").fillna(0)
+        for column in ["Monthly CTC", "CTC", "CCA", "Other Deductions"]:
+            if column not in prepared.columns:
+                prepared[column] = 0
+        if "PF Enabled" not in prepared.columns:
+            prepared["PF Enabled"] = "Yes"
+        if "State" not in prepared.columns:
+            prepared["State"] = "Delhi"
+
+        # Map Monthly CTC to CTC for the rules engine
+        prepared["CTC"] = prepared["Monthly CTC"]
+
+        prepared["PF Enabled"] = (
+            prepared["PF Enabled"]
+            .fillna("Yes")
+            .astype(str)
+            .str.strip()
+            .str.lower()
+            .replace({"true": "yes", "false": "no", "y": "yes", "n": "no"})
+            .str.capitalize()
+        )
+        prepared["State"] = prepared["State"].fillna("Delhi").astype(str).str.strip()
 
         result_rows: list[dict[str, object]] = []
         success_rows = 0
@@ -167,6 +195,15 @@ class SalaryRuleEngine:
                 for output in OUTPUT_COLUMNS:
                     result_row.setdefault(output, None)
                 result_row["Validation Message"] = " | ".join(status["errors"])
+                result_row["Processing Status"] = "dmn errors"
+                result_rows.append(result_row)
+                continue
+
+            if not decisions:
+                result_row = {**row}
+                for output in OUTPUT_COLUMNS:
+                    result_row.setdefault(output, None)
+                result_row["Validation Message"] = "No DMN decisions were returned"
                 result_row["Processing Status"] = "dmn errors"
                 result_rows.append(result_row)
                 continue

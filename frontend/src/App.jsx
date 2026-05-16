@@ -4,7 +4,7 @@ const API_BASE = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
 
 const apiUrl = (path) => `${API_BASE}${path}`;
 
-const graphQlRequest = async (query) => {
+const graphQlRequest = async (query, variables = {}) => {
   const tryPaths = ["/graphql/", "/graphql"];
   let lastError = "Request failed.";
 
@@ -16,7 +16,7 @@ const graphQlRequest = async (query) => {
           "Content-Type": "application/json",
           Accept: "application/json",
         },
-        body: JSON.stringify({ query }),
+        body: JSON.stringify({ query, variables }),
       });
 
       const raw = await response.text();
@@ -50,50 +50,38 @@ const graphQlRequest = async (query) => {
   throw new Error(lastError);
 };
 
-const fetchJson = async (path, options = {}) => {
-  const response = await fetch(apiUrl(path), options);
-  const raw = await response.text();
-  let payload = null;
-  try {
-    payload = raw ? JSON.parse(raw) : null;
-  } catch {
-    payload = null;
-  }
-
-  if (!response.ok) {
-    if (payload?.detail) {
-      throw new Error(payload.detail);
-    }
-    throw new Error(`Request failed${response.status ? ` (${response.status})` : ""}.`);
-  }
-
-  if (!payload) {
-    throw new Error("Server returned an empty response.");
-  }
-
-  return payload;
+// Convert file to base64 string
+const fileToBase64 = async (file) => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result;
+      const base64 = result.split(",")[1];
+      resolve(base64);
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
 };
 
-const uploadWorkbook = async (url, file) => {
-  const formData = new FormData();
-  formData.append("file", file);
-  const response = await fetch(apiUrl(url), {
-    method: "POST",
-    body: formData,
-  });
-
-  if (!response.ok) {
-    let detail = "Upload failed";
-    try {
-      const payload = await response.json();
-      detail = payload.detail || payload.message || detail;
-    } catch {
-      detail = await response.text();
-    }
-    throw new Error(detail);
+// Convert base64 to blob and download
+const downloadFile = (base64Content, fileName) => {
+  const binaryString = atob(base64Content);
+  const bytes = new Uint8Array(binaryString.length);
+  for (let i = 0; i < binaryString.length; i++) {
+    bytes[i] = binaryString.charCodeAt(i);
   }
-
-  return response;
+  const blob = new Blob([bytes], {
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 };
 
 const statusLabels = {
@@ -106,7 +94,7 @@ function App() {
   const [rulesInfo, setRulesInfo] = useState({ exists: false, path: "" });
   const [status, setStatus] = useState("loading");
   const [message, setMessage] = useState("Checking the current setup...");
-  const [busy, setBusy] = useState({ rules: false, employees: false, refresh: false });
+  const [busy, setBusy] = useState({ rules: false, employees: false, refresh: false, downloadRules: false, downloadTemplate: false });
   const [lastResult, setLastResult] = useState(null);
 
   const refreshSummary = async () => {
@@ -136,6 +124,46 @@ function App() {
     refreshSummary();
   }, []);
 
+  const handleDownloadRules = async () => {
+    setBusy((current) => ({ ...current, downloadRules: true }));
+    try {
+      const payload = await graphQlRequest(`
+        query DownloadRules {
+          downloadRules {
+            fileName
+            fileContent
+          }
+        }
+      `);
+      downloadFile(payload.downloadRules.fileContent, payload.downloadRules.fileName);
+    } catch (error) {
+      setStatus("error");
+      setMessage(error.message);
+    } finally {
+      setBusy((current) => ({ ...current, downloadRules: false }));
+    }
+  };
+
+  const handleDownloadTemplate = async () => {
+    setBusy((current) => ({ ...current, downloadTemplate: true }));
+    try {
+      const payload = await graphQlRequest(`
+        query DownloadTemplate {
+          downloadEmployeeTemplate {
+            fileName
+            fileContent
+          }
+        }
+      `);
+      downloadFile(payload.downloadEmployeeTemplate.fileContent, payload.downloadEmployeeTemplate.fileName);
+    } catch (error) {
+      setStatus("error");
+      setMessage(error.message);
+    } finally {
+      setBusy((current) => ({ ...current, downloadTemplate: false }));
+    }
+  };
+
   const handleRulesUpload = async (event) => {
     event.preventDefault();
     const form = event.currentTarget;
@@ -148,12 +176,16 @@ function App() {
 
     setBusy((current) => ({ ...current, rules: true }));
     try {
-      await uploadWorkbook("/rules/upload", file);
-      await graphQlRequest(`
-        mutation ReloadRules {
-          reloadRules
+      const base64Content = await fileToBase64(file);
+      const payload = await graphQlRequest(
+        `mutation UploadRules($fileContent: String!, $fileName: String!) {
+          uploadRules(fileContent: $fileContent, fileName: $fileName)
+        }`,
+        {
+          fileContent: base64Content,
+          fileName: file.name,
         }
-      `);
+      );
       setStatus("healthy");
       setMessage("Updated salary rules uploaded successfully.");
       await refreshSummary();
@@ -178,25 +210,30 @@ function App() {
 
     setBusy((current) => ({ ...current, employees: true }));
     try {
-      const response = await uploadWorkbook("/employees/process", file);
-      const blob = await response.blob();
-      const fileName =
-        response.headers.get("content-disposition")?.match(/filename="?([^"]+)"?/)?.[1] ||
-        "salary_results.xlsx";
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = fileName;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      URL.revokeObjectURL(url);
+      const base64Content = await fileToBase64(file);
+      const payload = await graphQlRequest(
+        `mutation ProcessEmployees($fileContent: String!, $fileName: String!) {
+          processEmployees(fileContent: $fileContent, fileName: $fileName) {
+            processedRows
+            successRows
+            errorRows
+            fileName
+            fileContent
+          }
+        }`,
+        {
+          fileContent: base64Content,
+          fileName: file.name,
+        }
+      );
+      const summary = payload.processEmployees;
+      downloadFile(summary.fileContent, summary.fileName);
 
       const result = {
-        processedRows: response.headers.get("x-processed-rows") || "0",
-        successRows: response.headers.get("x-success-rows") || "0",
-        errorRows: response.headers.get("x-error-rows") || "0",
-        fileName,
+        processedRows: summary.processedRows,
+        successRows: summary.successRows,
+        errorRows: summary.errorRows,
+        fileName: summary.fileName,
       };
       setLastResult(result);
       setStatus("healthy");
@@ -240,8 +277,12 @@ function App() {
             <h2>1. Prepare your files</h2>
             <p>Start with the latest templates so the columns stay in the correct format.</p>
             <div className="button-row">
-              <a className="primary-link" href={`${API_BASE}/rules/download`}>Download salary rules</a>
-              <a className="secondary-link" href={`${API_BASE}/employees/template`}>Download employee template</a>
+              <button className="primary-link" onClick={handleDownloadRules} disabled={busy.downloadRules}>
+                {busy.downloadRules ? "Downloading..." : "Download salary rules"}
+              </button>
+              <button className="secondary-link" onClick={handleDownloadTemplate} disabled={busy.downloadTemplate}>
+                {busy.downloadTemplate ? "Downloading..." : "Download employee template"}
+              </button>
             </div>
             <div className="mini-note">
               <strong>Current rules file:</strong>
