@@ -230,13 +230,12 @@ function App() {
       const summary = payload.processEmployees;
       downloadFile(summary.fileContent, summary.fileName);
 
-      const result = {
+      setLastResult({
         processedRows: summary.processedRows,
         successRows: summary.successRows,
         errorRows: summary.errorRows,
         fileName: summary.fileName,
-      };
-      setLastResult(result);
+      });
       setStatus("healthy");
       setMessage("Processed file is ready and has been downloaded.");
     } catch (error) {
@@ -272,9 +271,7 @@ function App() {
               <span className="status-dot" />
               <p className="status-label">{statusLabels[status]}</p>
             </div>
-            <div>
-              <p className="status-message">{message}</p>
-            </div>
+            <p className="status-message">{message}</p>
             <button className="secondary-button" onClick={refreshSummary} disabled={busy.refresh}>
               {busy.refresh ? "Refreshing..." : "Refresh status"}
             </button>

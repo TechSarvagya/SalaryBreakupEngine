@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from io import BytesIO
 from pathlib import Path
 
 import pandas as pd
@@ -42,14 +41,6 @@ def ensure_employee_template() -> None:
     workbook.close()
     if headings != INPUT_COLUMNS:
         _write_employee_template()
-
-
-def dataframe_to_workbook_bytes(dataframe: pd.DataFrame, sheet_name: str = "Results") -> bytes:
-    buffer = BytesIO()
-    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-        dataframe.to_excel(writer, index=False, sheet_name=sheet_name)
-    buffer.seek(0)
-    return buffer.getvalue()
 
 
 def read_employee_workbook(path: Path) -> pd.DataFrame:

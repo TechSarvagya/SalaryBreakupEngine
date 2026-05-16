@@ -11,12 +11,6 @@ from pyDMNrules import DMN
 from app.config import OUTPUT_DIR, RULES_WORKBOOK_PATH
 from app.models import ProcessingSummary
 
-NUMERIC_COLUMNS = [
-    "Monthly CTC",
-    "CTC",
-    "CCA",
-    "Other Deductions",
-]
 REQUIRED_COLUMNS = ["Monthly CTC", "CCA", "PF Enabled", "State"]
 OUTPUT_COLUMNS = [
     "Validation Message",
@@ -140,12 +134,16 @@ class SalaryRuleEngine:
         for column in REQUIRED_COLUMNS:
             if column not in prepared.columns:
                 prepared[column] = None
-        for column in ["Monthly CTC", "CTC", "CCA"]:
-            if column in prepared.columns:
-                prepared[column] = pd.to_numeric(prepared[column], errors="coerce")
+        # Support either Monthly CTC or CTC as input
+        if "Monthly CTC" in prepared.columns:
+            prepared["Monthly CTC"] = pd.to_numeric(prepared["Monthly CTC"], errors="coerce")
+        if "CTC" in prepared.columns:
+            prepared["CTC"] = pd.to_numeric(prepared["CTC"], errors="coerce")
+        if "CCA" in prepared.columns:
+            prepared["CCA"] = pd.to_numeric(prepared["CCA"], errors="coerce")
         if "Other Deductions" in prepared.columns:
             prepared["Other Deductions"] = pd.to_numeric(prepared["Other Deductions"], errors="coerce").fillna(0)
-        for column in NUMERIC_COLUMNS:
+        for column in ["Monthly CTC", "CTC", "CCA", "Other Deductions"]:
             if column not in prepared.columns:
                 prepared[column] = 0
         if "PF Enabled" not in prepared.columns:
@@ -153,7 +151,9 @@ class SalaryRuleEngine:
         if "State" not in prepared.columns:
             prepared["State"] = "Delhi"
 
+        # Map Monthly CTC to CTC for the rules engine
         prepared["CTC"] = prepared["Monthly CTC"]
+
         prepared["PF Enabled"] = (
             prepared["PF Enabled"]
             .fillna("Yes")

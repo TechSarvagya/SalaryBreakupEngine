@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 from typing import Iterable
 
 from openpyxl import Workbook
@@ -25,13 +26,9 @@ def _autosize_sheet(sheet) -> None:
         max_length = 0
         column = get_column_letter(col[0].column)
         for cell in col:
-            try:
-                if cell.value is not None:
-                    max_length = max(max_length, len(str(cell.value)))
-            except Exception:
-                pass
-        adjusted_width = min(max(max_length + 2, 12), 70)
-        sheet.column_dimensions[column].width = adjusted_width
+            if cell.value is not None:
+                max_length = max(max_length, len(str(cell.value)))
+        sheet.column_dimensions[column].width = min(max(max_length + 2, 12), 70)
 
 
 def _set_border(cell, *, left=None, right=None, top=None, bottom=None) -> None:
@@ -88,23 +85,22 @@ def _write_table(
     hit_cell = sheet.cell(row=start_row + 1, column=col, value=hit_policy)
     hit_cell.font = HEADER_FONT
     hit_cell.fill = GUIDE_FILL
-    hit_cell.comment = Comment("Hit policy used by pyDMNrules. Usually leave this unchanged.", "Salary Rule Engine")
     _set_border(hit_cell, bottom=DOUBLE)
     col += 1
+
     for inp in inputs:
         header_cell = sheet.cell(row=start_row + 1, column=col, value=inp)
         header_cell.font = HEADER_FONT
         header_cell.fill = INPUT_FILL
         header_cell.alignment = BODY_ALIGNMENT
-        header_cell.comment = Comment("Input condition column. '-' means this input does not restrict the rule.", "Salary Rule Engine")
         _set_border(header_cell, bottom=DOUBLE)
         col += 1
+
     for out in outputs:
         header_cell = sheet.cell(row=start_row + 1, column=col, value=out)
         header_cell.font = HEADER_FONT
         header_cell.fill = OUTPUT_FILL
         header_cell.alignment = BODY_ALIGNMENT
-        header_cell.comment = Comment("Output calculation column. This is where the rule returns a value.", "Salary Rule Engine")
         _set_border(header_cell, bottom=DOUBLE)
         col += 1
 
@@ -113,12 +109,6 @@ def _write_table(
         first_output_col = last_input_col + 1
         _set_border(sheet.cell(row=start_row + 1, column=last_input_col), right=DOUBLE)
         _set_border(sheet.cell(row=start_row + 1, column=first_output_col), left=DOUBLE)
-    else:
-        _set_border(hit_cell, right=DOUBLE)
-        _set_border(sheet.cell(row=start_row + 1, column=2), left=DOUBLE)
-
-    last_output_col = 1 + len(inputs) + len(outputs)
-    _set_border(sheet.cell(row=start_row + 1, column=last_output_col), right=DOUBLE)
 
     row = start_row + 2
     for rule in rules:
@@ -127,10 +117,6 @@ def _write_table(
             cell.fill = RULE_FILL
             cell.alignment = BODY_ALIGNMENT
             _set_border(cell, left=THIN, right=THIN, top=THIN, bottom=THIN)
-            if c == 1:
-                cell.comment = Comment("Rule number. Keep unique within this table.", "Salary Rule Engine")
-            elif c > 1 + len(inputs):
-                cell.comment = Comment("Editable output expression. Change rates, caps, fixed amounts, or slab formulas carefully.", "Salary Rule Engine")
         row += 1
 
     return row + 1
@@ -176,7 +162,6 @@ def _write_glossary(sheet) -> None:
         sheet.append(row)
     sheet["A1"].font = TITLE_FONT
     sheet["A1"].fill = TITLE_FILL
-    sheet["A2"].font = HEADER_FONT
     for cell in sheet[2]:
         cell.fill = GUIDE_FILL
         cell.font = HEADER_FONT
@@ -187,74 +172,27 @@ def _write_glossary(sheet) -> None:
 def build_rules_workbook(path=RULES_WORKBOOK_PATH):
     path.parent.mkdir(parents=True, exist_ok=True)
     wb = Workbook()
-    if "Sheet" in wb.sheetnames:
-        wb.remove(wb["Sheet"])
+    wb.remove(wb["Sheet"])
 
-    glossary = wb.create_sheet("Glossary")
-    _write_glossary(glossary)
-
-    instr = wb.create_sheet("How to Use")
-    _write_instructions_sheet(instr)
+    _write_glossary(wb.create_sheet("Glossary"))
+    _write_instructions_sheet(wb.create_sheet("How to Use"))
 
     comp = wb.create_sheet("01 Salary Components")
     r = 1
     r = _write_table(comp, r, "Basic Salary", ["Monthly CTC"], ["Basic"], [["1", "-", "decimal(Employee.monthly_ctc * 0.4, 0)"]])
     r = _write_table(comp, r, "HRA", ["Basic"], ["HRA"], [["1", "-", "decimal(Salary.basic * 0.4, 0)"]])
-    r = _write_table(comp, r, "Fixed Allowances", [], ["Transport Allowance", "Medical Allowance"], [["1", "1600", "1250"]])
+    r = _write_table(comp, r, "Fixed Allowances", ["Monthly CTC"], ["Transport Allowance", "Medical Allowance"], [["1", "-", "1600", "1250"]])
     r = _write_table(comp, r, "Bonus", ["Basic"], ["Bonus"], [["1", "-", "decimal(Salary.basic * 0.0833, 0)"]])
-    r = _write_table(
-        comp,
-        r,
-        "Employer PF",
-        ["PF Enabled", "Basic"],
-        ["Employer PF"],
-        [["1", '"No"', "-", "0"], ["2", '"Yes"', "-", "decimal(min(Salary.basic, 15000) * 0.12, 0)"]],
-    )
+    r = _write_table(comp, r, "Employer PF", ["PF Enabled", "Basic"], ["Employer PF"], [["1", '"No"', "-", "0"], ["2", '"Yes"', "-", "decimal(min(Salary.basic, 15000) * 0.12, 0)"]])
     r = _write_table(comp, r, "Gratuity", ["Basic"], ["Gratuity"], [["1", "-", "decimal(Salary.basic * 0.0481, 0)"]])
-    r = _write_table(comp, r, "Employer Insurance", [], ["Employer Insurance"], [["1", "1000"]])
-    r = _write_table(
-        comp,
-        r,
-        "Employee PF",
-        ["PF Enabled", "Basic"],
-        ["Employee PF"],
-        [["1", '"No"', "-", "0"], ["2", '"Yes"', "-", "decimal(min(Salary.basic, 15000) * 0.12, 0)"]],
-    )
-    r = _write_table(
-        comp,
-        r,
-        "Gross Before ESI",
-        ["Monthly CTC", "Employer PF", "Gratuity", "Employer Insurance"],
-        ["Gross Before ESI"],
-        [["1", "-", "-", "-", "-", "decimal(Employee.monthly_ctc - EmployerCost.employer_pf - EmployerCost.gratuity - EmployerCost.employer_insurance, 0)"]],
-    )
-    r = _write_table(
-        comp,
-        r,
-        "Employer ESI",
-        ["Gross Before ESI"],
-        ["Employer ESI"],
-        [["1", "<= 21000", "decimal((Salary.gross_before_esi / 1.0325) * 0.0325, 0)"], ["2", "> 21000", "0"]],
-    )
+    r = _write_table(comp, r, "Employer Insurance", ["Monthly CTC"], ["Employer Insurance"], [["1", "-", "1000"]])
+    r = _write_table(comp, r, "Employee PF", ["PF Enabled", "Basic"], ["Employee PF"], [["1", '"No"', "-", "0"], ["2", '"Yes"', "-", "decimal(min(Salary.basic, 15000) * 0.12, 0)"]])
+    r = _write_table(comp, r, "Gross Before ESI", ["Monthly CTC", "Employer PF", "Gratuity", "Employer Insurance"], ["Gross Before ESI"], [["1", "-", "-", "-", "-", "decimal(Employee.monthly_ctc - EmployerCost.employer_pf - EmployerCost.gratuity - EmployerCost.employer_insurance, 0)"]])
+    r = _write_table(comp, r, "Employer ESI", ["Gross Before ESI"], ["Employer ESI"], [["1", "<= 21000", "decimal((Salary.gross_before_esi / 1.0325) * 0.0325, 0)"], ["2", "> 21000", "0"]])
     r = _write_table(comp, r, "Gross", ["Gross Before ESI", "Employer ESI"], ["Gross"], [["1", "-", "-", "decimal(Salary.gross_before_esi - EmployerCost.employer_esi, 0)"]])
     r = _write_table(comp, r, "Employee ESI", ["Gross"], ["Employee ESI"], [["1", "<= 21000", "decimal(Salary.gross * 0.0075, 0)"], ["2", "> 21000", "0"]])
-    r = _write_table(
-        comp,
-        r,
-        "Professional Tax",
-        ["State", "Gross"],
-        ["Professional Tax"],
-        [["1", '"Delhi"', "<= 15000", "0"], ["2", '"Delhi"', "> 15000", "200"], ["3", "-", "-", "0"]],
-        hit_policy="F",
-    )
-    _write_table(
-        comp,
-        r,
-        "Special Allowance",
-        ["Gross", "Basic", "HRA", "Transport Allowance", "Medical Allowance", "Bonus"],
-        ["Special"],
-        [["1", "-", "-", "-", "-", "-", "-", "decimal(Salary.gross - Salary.basic - Salary.hra - Salary.transport_allowance - Salary.medical_allowance - Salary.bonus, 0)"]],
-    )
+    r = _write_table(comp, r, "Professional Tax", ["State", "Gross"], ["Professional Tax"], [["1", '"Delhi"', "<= 15000", "0"], ["2", '"Delhi"', "> 15000", "200"], ["3", "-", "-", "0"]], hit_policy="F")
+    _write_table(comp, r, "Special Allowance", ["Gross", "Basic", "HRA", "Transport Allowance", "Medical Allowance", "Bonus"], ["Special"], [["1", "-", "-", "-", "-", "-", "-", "decimal(Salary.gross - Salary.basic - Salary.hra - Salary.transport_allowance - Salary.medical_allowance - Salary.bonus, 0)"]])
     comp.freeze_panes = "A2"
     _autosize_sheet(comp)
 

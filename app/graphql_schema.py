@@ -93,14 +93,15 @@ class Mutation:
         if not file_name.lower().endswith(".xlsx"):
             raise ValueError("Only .xlsx files are supported")
 
+        engine = SalaryRuleEngine()
         with NamedTemporaryFile(delete=False, suffix=".xlsx") as temp_file:
             temp_file.write(base64.b64decode(file_content))
             temp_path = Path(temp_file.name)
 
         try:
             dataframe = read_employee_workbook(temp_path)
-            results, summary = SalaryRuleEngine().process_dataframe(dataframe)
-            output_path = SalaryRuleEngine().save_results(results, file_name)
+            results, summary = engine.process_dataframe(dataframe)
+            output_path = engine.save_results(results, file_name)
             result_content = base64.b64encode(output_path.read_bytes()).decode("utf-8")
 
             return ProcessingSummary(
